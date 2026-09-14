@@ -30,6 +30,21 @@ linters:
           deny:
             - pkg: sort
               desc: Should be replaced with slices package
+        # A family declared outside internal/metrics registers against the same
+        # controller-runtime registry and is scraped, but cmd/metrics-docs-gen
+        # never sees it. The exemption is *.go rather than ** because parseDir
+        # does not descend, so a subpackage would be scraped and undocumented.
+        # Tests assert on metrics rather than declare shipped ones, and the
+        # sandbox-router ships its own binary and registry.
+        metrics-stay-in-internal-metrics:
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/metrics/*.go"
+            - "!**/sandbox-router/**"
+          deny:
+            - pkg: github.com/prometheus/client_golang/prometheus
+              desc: Declare metrics in internal/metrics so they reach docs/metrics.md
     goheader:
       values:
         regexp:

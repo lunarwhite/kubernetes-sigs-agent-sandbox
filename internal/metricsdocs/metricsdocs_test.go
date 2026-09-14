@@ -15,15 +15,8 @@
 package metricsdocs
 
 import (
-	"bytes"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -113,86 +106,4 @@ func TestGenerateExtractsBeforeWriting(t *testing.T) {
 	got, err := os.ReadFile(output)
 	require.NoError(t, err)
 	require.Equal(t, "previous contents", string(got))
-}
-
-// repoRoot is the module the controller binary is built from.
-const repoRoot = "../.."
-
-// TestPrometheusImportsStayInMetricsPackage backs the claim the
-// generated reference makes about listing every family the controller exposes.
-// A constructor added under controllers/ or extensions/ would register against
-// the same controller-runtime registry, be scraped, and never be documented.
-//
-// The whole module is walked rather than a list of directories to cover, so a
-// new top-level package is checked by default. Gitignored paths are excused by
-// gitIgnored below; the rest are scope decisions: the sandbox-router is a
-// separate binary with its own registry, nested modules are not built into the
-// controller, and .git holds no Go source of ours.
-func TestPrometheusImportsStayInMetricsPackage(t *testing.T) {
-	// WalkDir builds paths from the relative root above, so the excused
-	// directories need the same spelling.
-	allowed := filepath.Join(repoRoot, "internal", "metrics")
-	skipped := append(gitIgnored(t),
-		filepath.Join(repoRoot, "sandbox-router"),
-		filepath.Join(repoRoot, ".git"),
-	)
-
-	require.NoError(t, filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if slices.Contains(skipped, path) || isNestedModule(t, path) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || filepath.Dir(path) == allowed {
-			return nil
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution|parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		for _, imp := range file.Imports {
-			require.NotContains(t, imp.Path.Value, prometheusPath,
-				"%s imports the Prometheus client; metrics belong in %s so they reach the generated reference", path, controllerMetricsDir)
-		}
-		return nil
-	}))
-}
-
-// gitIgnored lists the paths .gitignore excludes, so this walk does not carry a
-// second copy of that list. Several of them, bin and tmp among others, can hold
-// scratch Go files that are not part of the controller and must not fail the
-// test.
-func gitIgnored(t *testing.T) []string {
-	t.Helper()
-	cmd := exec.Command("git", "-C", repoRoot, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	// Without this, a container-level failure such as safe.directory surfaces in
-	// the blocking presubmit as a bare "exit status 128".
-	require.NoError(t, err, "listing gitignored paths: %s", stderr.String())
-
-	var paths []string
-	for entry := range strings.SplitSeq(strings.TrimSuffix(string(out), "\x00"), "\x00") {
-		if entry = strings.TrimSuffix(entry, "/"); entry != "" {
-			paths = append(paths, filepath.Join(repoRoot, entry))
-		}
-	}
-	return paths
-}
-
-// isNestedModule reports whether dir declares a module of its own, and so is
-// built separately from the controller. The module root itself is not one.
-func isNestedModule(t *testing.T, dir string) bool {
-	t.Helper()
-	if filepath.Clean(dir) == filepath.Clean(repoRoot) {
-		return false
-	}
-	_, err := os.Stat(filepath.Join(dir, "go.mod"))
-	require.True(t, err == nil || os.IsNotExist(err), "checking %s for a nested module: %v", dir, err)
-	return err == nil
 }
