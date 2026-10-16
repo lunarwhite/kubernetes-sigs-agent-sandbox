@@ -435,9 +435,10 @@ class AsyncSandboxClient(Generic[T]):
             # rather than a generic "not found" wrap.
             raise
         except Exception as e:
-            if existing:
-                # A failed lookup doesn't mean the claim is gone, and cleanup
-                # only reaches tracked handles, so close locally and stay tracked.
+            # Other callers may hold this handle, so close it only once its claim
+            # or Sandbox is gone. It stays tracked because cleanup only reaches
+            # tracked handles.
+            if existing and await self._claim_or_sandbox_gone(claim_name, existing.sandbox_id, namespace):
                 await existing.close_connection()
             raise SandboxNotFoundError(
                 f"Sandbox claim '{claim_name}' not found or resolution failed "
@@ -463,6 +464,16 @@ class AsyncSandboxClient(Generic[T]):
         async with self._lock:
             self._active_connection_sandboxes[key] = new_handle
         return new_handle
+
+    async def _claim_or_sandbox_gone(self, claim_name: str, sandbox_id: str, namespace: str) -> bool:
+        """Returns True if the claim or the Sandbox is gone, False if both exist or a GET fails."""
+        try:
+            claim = await self.k8s_helper.get_sandbox_claim(claim_name, namespace)
+            if not claim:
+                return True
+            return await self.k8s_helper.get_sandbox(sandbox_id, namespace) is None
+        except Exception:
+            return False
 
     async def list_active_sandboxes(self) -> list[tuple[str, str]]:
         """Returns a list of ``(namespace, claim_name)`` tuples currently managed."""
