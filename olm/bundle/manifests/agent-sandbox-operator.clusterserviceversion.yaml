@@ -327,6 +327,12 @@ spec:
                 - --leader-elect=true
                 - --extensions
                 image: registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.8
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: healthz
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
                 name: agent-sandbox-controller
                 ports:
                 - containerPort: 8080
@@ -335,6 +341,12 @@ spec:
                 - containerPort: 8081
                   name: healthz
                   protocol: TCP
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: healthz
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
                 resources: {}
                 volumeMounts:
                 - mountPath: /etc/sandbox-config

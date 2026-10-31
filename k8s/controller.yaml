@@ -87,6 +87,18 @@ spec:
         - name: healthz
           containerPort: 8081
           protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: healthz
+          initialDelaySeconds: 5
+          periodSeconds: 10
         # Uncomment when --metrics-secure-serving is enabled:
         # volumeMounts:
         # - name: metrics-certs
