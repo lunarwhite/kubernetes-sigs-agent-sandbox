@@ -13,8 +13,9 @@ spec:
   template:
     metadata:
       {{- $selectorLabels := include "agent-sandbox.selectorLabels" . | fromYaml }}
+      {{- /* The static manifests' app label; docs, test tooling and k8s/hardening select controller Pods by it. */}}
       labels:
-        {{- toYaml (merge (dict) $selectorLabels .Values.podLabels) | nindent 8 }}
+        {{- toYaml (merge (dict) $selectorLabels .Values.podLabels (dict "app" "agent-sandbox-controller")) | nindent 8 }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}

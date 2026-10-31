@@ -120,7 +120,7 @@ The following table lists the configurable parameters and their defaults. For fl
 | `podSecurityContext` | Pod `securityContext`; only rendered when set (e.g. Kyverno / Pod Security) | `null` |
 | `containerSecurityContext` | Container `securityContext` for the controller; only rendered when set | `null` |
 | `podAnnotations` | Annotations added to the controller pod template (e.g. service-mesh sidecar toggles, Prometheus scrape autodiscovery) | `{}` |
-| `podLabels` | Extra labels added to the controller pod template alongside the chart's selector labels (selector labels take precedence on conflict) | `{}` |
+| `podLabels` | Extra labels added to the controller pod template alongside the chart's selector labels (selector labels take precedence on conflict) and its default `app: agent-sandbox-controller` label, which `podLabels` can override | `{}` |
 | `service.name` | Name of the controller Service that exposes the metrics endpoint | `agent-sandbox-controller` |
 | `metrics.serviceMonitor.enabled` | Create a Prometheus Operator `ServiceMonitor` for the controller metrics endpoint (requires the prometheus-operator CRDs) | `false` |
 | `metrics.serviceMonitor.additionalLabels` | Extra labels on the `ServiceMonitor` (often required to match the Prometheus `serviceMonitorSelector`, e.g. `release: kube-prometheus-stack`) | `{}` |
