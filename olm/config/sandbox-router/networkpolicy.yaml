@@ -111,7 +111,9 @@ spec:
   # Endpoint addresses change when control-plane nodes are replaced, so a CIDR
   # for the control-plane subnet is easier to maintain than per-node /32
   # entries. On a CNI that evaluates policy before the rewrite, the ClusterIP
-  # is what matches; list both as peers to cover either dataplane.
+  # is what matches; list both as peers to cover either dataplane. Cilium
+  # matches node IPs with an ipBlock only when its policy-cidr-match-mode
+  # includes nodes.
   #
   # Skip this rule only when running with --cache-enabled=false AND
   # --authz-mode=allow-all.

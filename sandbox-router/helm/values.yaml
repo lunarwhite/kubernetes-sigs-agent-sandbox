@@ -137,11 +137,13 @@ networkPolicy:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: monitoring
-  # apiServerCIDRs lists the CIDRs of the Kubernetes API server endpoints
-  # (control-plane node IPs or the external load balancer), allowed on ports 443
-  # and 6443. Needed on enforcing clusters whose apiserver is not a Pod in the
-  # default namespace: without it the Pod-IP cache cannot sync and TokenReview
-  # calls fail. Example:
+  # apiServerCIDRs restricts egress to the Kubernetes API server (ports 443 and
+  # 6443) to these CIDRs. Empty allows those ports to any destination. List the
+  # endpoint addresses from
+  # `kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes`,
+  # plus the kubernetes Service ClusterIP on network plugins that evaluate
+  # egress before Service translation. Cilium matches node IPs only when its
+  # policy-cidr-match-mode includes nodes. Example:
   # apiServerCIDRs:
   #   - 10.0.0.2/32
   apiServerCIDRs: []
