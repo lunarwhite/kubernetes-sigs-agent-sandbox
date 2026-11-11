@@ -345,9 +345,10 @@ All options are documented on the `Options` struct in
   `in-cluster-service`, or `in-cluster-pod-ip`. `router-port-forward`
   port-forwards the sandbox-router, which proxies sandboxd's REST and gRPC
   APIs. gRPC (`Run`, `Start`, and watchers) needs sandbox-router v1.0.9 or
-  later. The router's `ProxyTimeout` caps each REST request. Set `DisablePodIPRouting: true` to route by cache or
-  DNS instead of a stored pod IP when the router has `--cache-enabled` or the
-  Sandbox has a headless Service.
+  later. The router's `ProxyTimeout` caps each REST request. Set `DisablePodIPRouting: true` to route by DNS
+  instead of a stored pod IP when the Sandbox has a headless Service. Routers
+  newer than v1.0.10 ignore the pod IP when they run with `--cache-enabled`;
+  set the option for older routers with the cache too.
 - `SandboxdAuthToken`: token for a sandboxd started with `--auth-token-sha256`
   or `--auth-token-file` (`RuntimeSandboxd` only). The SDK sends it as
   `Authorization: Bearer`, or as `X-Sandboxd-Token` with `router-port-forward`

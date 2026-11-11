@@ -249,7 +249,8 @@ func RegisterFlags(fs *flag.FlagSet, c *Config, lookup LookupEnvFunc) {
 	fs.BoolVar(&c.CacheEnabled, "cache-enabled", c.CacheEnabled,
 		"Enable the in-process Pod-IP cache (KEP-NNNN fast path). When on, "+
 			"the router watches sandbox-owned Pods and dials cached IPs for "+
-			"requests carrying X-Sandbox-UID, bypassing DNS. Requires Pod "+
+			"requests carrying X-Sandbox-UID, bypassing DNS. X-Sandbox-Pod-IP is "+
+			"ignored while the cache is on. Requires Pod "+
 			"get/list/watch RBAC and either in-cluster config or --kubeconfig.")
 	fs.StringVar(&c.CacheNamespace, "cache-namespace", c.CacheNamespace,
 		"Optional namespace filter for the Pod informer. Empty means "+

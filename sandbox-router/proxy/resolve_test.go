@@ -91,11 +91,28 @@ func TestResolve(t *testing.T) {
 		wantUID    types.UID
 	}{
 		{
-			name:       "pod ip override beats everything",
+			name:       "pod ip override without cache",
 			target:     Target{ID: "id", UID: "u1", Namespace: "ns", Port: 9999, PodIP: "10.0.0.1"},
-			lookup:     &fakeLookup{entries: map[types.UID]cache.Entry{"u1": {PodIP: "10.0.0.99"}}},
+			lookup:     nil,
 			wantURL:    "http://10.0.0.1:9999",
 			wantSource: SourcePodIP,
+		},
+		{
+			name:   "cache ignores pod ip override",
+			target: Target{ID: "id", Namespace: "ns", Port: 9999, PodIP: "10.0.0.1"},
+			lookup: &fakeLookup{entries: map[types.UID]cache.Entry{
+				"u1": {PodIP: "10.0.0.42", SandboxName: "id", Namespace: "ns"},
+			}},
+			wantURL:    "http://10.0.0.42:9999",
+			wantSource: SourceCacheName,
+			wantUID:    "u1",
+		},
+		{
+			name:       "cache miss ignores pod ip override and falls back to DNS",
+			target:     Target{ID: "id", Namespace: "ns", Port: 9999, PodIP: "10.0.0.1"},
+			lookup:     &fakeLookup{entries: map[types.UID]cache.Entry{}},
+			wantURL:    "http://id.ns.svc.cluster.local:9999",
+			wantSource: SourceDNS,
 		},
 		{
 			name:       "cache hit by UID",

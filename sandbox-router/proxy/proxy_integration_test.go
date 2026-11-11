@@ -395,7 +395,6 @@ func TestIntegration_CacheInvalidationSparesReplacementPod(t *testing.T) {
 // metric, which would be misleading.
 func TestIntegration_NoInvalidationOnDNSDialError(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.AllowLoopbackPodIP = true // httptest binds to 127.0.0.1
 	cfg.ProxyTimeout = 2 * time.Second
 	cfg.ResponseHeaderTimeout = 1 * time.Second
 	cfg.UpstreamMaxRetries = 0
@@ -409,13 +408,12 @@ func TestIntegration_NoInvalidationOnDNSDialError(t *testing.T) {
 	}))
 	defer router.Close()
 
-	// Pod-IP override means SourcePodIP, not SourceCache — invalidation
+	// The cache misses, so the request takes the DNS path — invalidation
 	// must not fire even with a UID present.
 	req, _ := http.NewRequest("GET", router.URL+"/x", nil)
 	req.Header.Set(HeaderSandboxID, "s")
 	req.Header.Set(HeaderSandboxUID, "some-uid")
 	req.Header.Set(HeaderSandboxNamespace, "ns")
-	req.Header.Set(HeaderSandboxPodIP, "127.0.0.1")
 	req.Header.Set(HeaderSandboxPort, pickFreePortStr(t))
 
 	resp, err := http.DefaultClient.Do(req)

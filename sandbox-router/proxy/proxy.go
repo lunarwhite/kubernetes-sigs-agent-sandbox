@@ -246,6 +246,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// dial-class failures, and the Rewrite callback re-uses the URL.
 	target0 := target // capture for closures
 	upstreamURL, src, resolved := target0.Resolve("http", h.cfg.ClusterDomain, upstreamPath, r.URL.RawQuery, h.cache)
+	if h.cache != nil && target0.PodIP != "" {
+		observability.LoggerFromContext(r.Context(), h.log).V(1).Info("ignored X-Sandbox-Pod-IP because the Pod-IP cache is enabled",
+			"sandbox", target0.ID,
+			"namespace", target0.Namespace,
+			"source", string(src),
+		)
+	}
 	if upstreamRawPath != "" {
 		// Header routing seeds RawPath from r.URL; path routing rewrites
 		// it in resolveTarget. Target.Resolve only assigns URL.Path, so

@@ -46,8 +46,8 @@ type Lookup interface {
 type Source string
 
 const (
-	// SourcePodIP — caller passed X-Sandbox-Pod-IP and we used it
-	// directly. Skips both cache and DNS.
+	// SourcePodIP — no cache was configured and the caller passed
+	// X-Sandbox-Pod-IP, so we dialed it directly instead of using DNS.
 	SourcePodIP Source = "pod-ip"
 	// SourceCache — UID was present and matched a cache entry; we dialed
 	// the live Pod IP. The KEP-NNNN fast/secure path.
@@ -57,8 +57,8 @@ const (
 	// owner wins. Keeps adopted warm-pool sandboxes routable without a
 	// per-sandbox Service (issue #883).
 	SourceCacheName Source = "cache-name"
-	// SourceDNS — no override, and both cache lookups missed (or the
-	// cache wasn't configured); fell back to the in-cluster DNS form
+	// SourceDNS — the cache missed, or no cache was configured and no
+	// override was sent; fell back to the in-cluster DNS form
 	// <id>.<ns>.svc.<cluster-domain>:<port>.
 	SourceDNS Source = "dns"
 )
@@ -67,11 +67,15 @@ const (
 // URL ready to hand to httputil.ReverseProxy. Resolution priority is
 // stable and intentional:
 //
-//  1. t.PodIP (set from X-Sandbox-Pod-IP) — explicit caller override,
-//     used by SDKs that already know the Pod IP from creating the Sandbox.
-//  2. one canonical cache lookup over t.UID and namespace/name. The
+//  1. one canonical cache lookup over t.UID and namespace/name. The
 //     current name owner wins over a stale requested UID; an exact UID
 //     can still select an unclaimed warm-pool member before adoption.
+//  2. t.PodIP (set from X-Sandbox-Pod-IP), only when no cache is
+//     configured. With a cache, the router dials only addresses it
+//     discovered itself, so a caller cannot point the router at a host
+//     that is not the Sandbox it named, such as another tenant's Pod,
+//     a node, or a cloud metadata endpoint. A cache miss falls through
+//     to DNS rather than to the caller's address.
 //  3. DNS form — always works without informer cache or a cache match,
 //     matching
 //     the Python router's behavior.
@@ -89,7 +93,7 @@ func (t Target) Resolve(scheme, clusterDomain, path, rawQuery string, lookup Loo
 	src := SourceDNS
 	var resolved cache.Entry
 	switch {
-	case t.PodIP != "":
+	case lookup == nil && t.PodIP != "":
 		host = t.PodIP
 		src = SourcePodIP
 	case lookup != nil:
@@ -113,9 +117,8 @@ func (t Target) Resolve(scheme, clusterDomain, path, rawQuery string, lookup Loo
 		}
 	}
 	if host == "" {
-		// DNS fallback. This branch fires when there was no PodIP override
-		// and either the cache wasn't configured or both cache lookups
-		// missed.
+		// DNS fallback. This branch fires when the cache missed, or when
+		// no cache was configured and there was no PodIP override.
 		host = t.ID + "." + t.Namespace + ".svc." + clusterDomain
 	}
 

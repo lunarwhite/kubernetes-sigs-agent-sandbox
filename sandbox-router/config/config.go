@@ -240,8 +240,10 @@ type Config struct {
 	// CacheEnabled turns on the in-process Pod-IP cache. When true the
 	// router builds an informer for sandbox-owned Pods and serves the
 	// KEP-NNNN fast path: requests carrying X-Sandbox-UID are dialed at
-	// the live PodIP, bypassing DNS. When false (the default) the router
-	// behaves like the Python original — DNS only.
+	// the live PodIP, bypassing DNS. While it is on, the router ignores
+	// X-Sandbox-Pod-IP. When false
+	// (the default) the router behaves like the Python original — DNS,
+	// or the X-Sandbox-Pod-IP header when present.
 	CacheEnabled bool
 	// CacheNamespace optionally narrows the Pod informer to a single
 	// namespace. Empty means cluster-wide (recommended; sandboxes can
