@@ -46,6 +46,12 @@ type SandboxTemplateSpecApplyConfiguration struct {
 	// will be applied to the single shared policy object. The underlying Kubernetes CNI will then
 	// dynamically enforce the updated rules across all existing and future sandboxes
 	// referencing this template.
+	// Deletion Behavior:
+	// Deleting the template does not delete the shared NetworkPolicy while Sandboxes
+	// created from the template still exist. The controller deletes the policy after
+	// those Sandboxes and their Pods are gone. If a template with the same name is
+	// created before then, it takes over the policy, and its rules also apply to the
+	// remaining Sandboxes.
 	// NOTE: This is a restricted subset of the standard Kubernetes NetworkPolicySpec.
 	// Fields like 'PodSelector' and 'PolicyTypes' are intentionally excluded because
 	// they are managed by the controller to ensure strict isolation and default-deny posture.

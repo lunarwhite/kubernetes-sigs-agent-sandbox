@@ -30,6 +30,8 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
@@ -63,7 +65,7 @@ func assertManagedNetworkPolicySelectsTemplateBackedPod(t *testing.T, templateNa
 
 func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 	templateDefault := &extensionsv1beta1.SandboxTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default", UID: "template-default-uid"},
 		Spec: extensionsv1beta1.SandboxTemplateSpec{SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{PodTemplate: sandboxv1beta1.PodTemplate{
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c1", Image: "img"}}},
 		}},
@@ -120,6 +122,14 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 	}
 	*existingNPToDelete.OwnerReferences[0].Controller = true
 
+	labeledNPToDelete := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-template-optout-network-policy",
+			Namespace: "default",
+			Labels:    map[string]string{sandboxTemplateRefHash: SandboxTemplateRefHash(templateOptOut.Name)},
+		},
+	}
+
 	outdatedNPToUpdate := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-template-custom-network-policy",
@@ -139,6 +149,26 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 		},
 	}
 	*outdatedNPToUpdate.OwnerReferences[0].Controller = true
+
+	legacyOwnedNP := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-template-network-policy",
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(templateDefault, extensionsv1beta1.GroupVersion.WithKind(extensionsv1beta1.SandboxTemplateKind)),
+			},
+		},
+		Spec: buildDefaultNetworkPolicySpec(templateDefault.Name),
+	}
+
+	leftoverNP := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-template-custom-network-policy",
+			Namespace: "default",
+			Labels:    map[string]string{sandboxTemplateRefHash: SandboxTemplateRefHash(templateWithNP.Name)},
+		},
+		Spec: buildDefaultNetworkPolicySpec(templateWithNP.Name),
+	}
 
 	testCases := []struct {
 		name                  string
@@ -210,6 +240,12 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 			expectNetworkPolicy: false,
 		},
 		{
+			name:                "Labeled NetworkPolicy is deleted when template updates to Unmanaged",
+			templateToReconcile: templateOptOut,
+			existingObjects:     []client.Object{templateOptOut, labeledNPToDelete},
+			expectNetworkPolicy: false,
+		},
+		{
 			name:                "Existing NetworkPolicy is updated when template spec changes",
 			templateToReconcile: templateWithNP,
 			existingObjects:     []client.Object{templateWithNP, outdatedNPToUpdate},
@@ -220,6 +256,23 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 				}
 				if np.Spec.Ingress[0].From[0].PodSelector.MatchLabels["app"] != "ingress" {
 					t.Errorf("expected updated ingress rule with app: ingress")
+				}
+			},
+		},
+		{
+			name:                "Owner reference from an older version is replaced by the label",
+			templateToReconcile: templateDefault,
+			existingObjects:     []client.Object{templateDefault, legacyOwnedNP},
+			expectNetworkPolicy: true,
+		},
+		{
+			name:                "Recreated template adopts its leftover labeled NetworkPolicy",
+			templateToReconcile: templateWithNP,
+			existingObjects:     []client.Object{templateWithNP, leftoverNP},
+			expectNetworkPolicy: true,
+			validateNetworkPolicy: func(t *testing.T, np *networkingv1.NetworkPolicy) {
+				if np.Spec.Ingress[0].From[0].PodSelector.MatchLabels["app"] != "ingress" {
+					t.Errorf("expected adopted NetworkPolicy to follow the template's ingress rule")
 				}
 			},
 		},
@@ -262,6 +315,12 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 			}
 			if tc.expectNetworkPolicy {
 				assertManagedNetworkPolicySelectsTemplateBackedPod(t, tc.templateToReconcile.Name, &np)
+				if len(np.OwnerReferences) != 0 {
+					t.Errorf("expected NetworkPolicy without owner references so that it outlives the template, got %v", np.OwnerReferences)
+				}
+				if got, want := np.Labels[sandboxTemplateRefHash], SandboxTemplateRefHash(tc.templateToReconcile.Name); got != want {
+					t.Errorf("expected NetworkPolicy to have label %q=%q, got %q", sandboxTemplateRefHash, want, got)
+				}
 			}
 
 			var updatedTemplate extensionsv1beta1.SandboxTemplate
@@ -284,6 +343,15 @@ func TestSandboxTemplateReconcileNetworkPolicy(t *testing.T) {
 			}
 			if relabeledTemplate.ResourceVersion != resourceVersion {
 				t.Errorf("expected second reconcile to leave SandboxTemplate resourceVersion unchanged, got %q, want %q", relabeledTemplate.ResourceVersion, resourceVersion)
+			}
+			if tc.expectNetworkPolicy {
+				var reconciledNP networkingv1.NetworkPolicy
+				if err := client.Get(context.Background(), npName, &reconciledNP); err != nil {
+					t.Fatalf("get network policy after second reconcile: %v", err)
+				}
+				if reconciledNP.ResourceVersion != np.ResourceVersion {
+					t.Errorf("expected second reconcile to leave NetworkPolicy resourceVersion unchanged, got %q, want %q", reconciledNP.ResourceVersion, np.ResourceVersion)
+				}
 			}
 		})
 	}
@@ -388,4 +456,203 @@ func TestSandboxTemplateReconcile_Vulnerability(t *testing.T) {
 			t.Errorf("VULNERABILITY: Unowned NetworkPolicy was updated/overwritten!")
 		}
 	})
+
+	t.Run("Does not update labeled NetworkPolicy that another object controls", func(t *testing.T) {
+		template := &extensionsv1beta1.SandboxTemplate{ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: "default"}}
+		otherOwner := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "other", UID: "other-uid"}}
+		otherNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "victim-network-policy", Namespace: "default",
+				Labels:          map[string]string{sandboxTemplateRefHash: SandboxTemplateRefHash(template.Name)},
+				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(otherOwner, corev1.SchemeGroupVersion.WithKind("ConfigMap"))},
+			},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"keep": "me"}},
+			},
+		}
+		r, c := newTestTemplateReconciler(t, template, otherNP)
+
+		if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "victim", Namespace: "default"}}); err == nil {
+			t.Error("expected reconcile to refuse to update a NetworkPolicy that another object controls")
+		}
+
+		var np networkingv1.NetworkPolicy
+		if err := c.Get(context.Background(), types.NamespacedName{Name: "victim-network-policy", Namespace: "default"}, &np); err != nil {
+			t.Fatalf("failed to get network policy: %v", err)
+		}
+		if _, ok := np.Spec.PodSelector.MatchLabels["keep"]; !ok {
+			t.Errorf("VULNERABILITY: NetworkPolicy controlled by another object was updated/overwritten!")
+		}
+	})
+}
+
+func newTestTemplateReconciler(t *testing.T, objects ...client.Object) (*SandboxTemplateReconciler, client.Client) {
+	t.Helper()
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	return &SandboxTemplateReconciler{
+		Client:   c,
+		Scheme:   scheme,
+		Recorder: events.NewFakeRecorder(10),
+		Tracer:   asmetrics.NewNoOp(),
+	}, c
+}
+
+func TestSandboxTemplateCleanupUnusedNetworkPolicy(t *testing.T) {
+	hashLabels := map[string]string{sandboxTemplateRefHash: SandboxTemplateRefHash("demo")}
+	npKey := types.NamespacedName{Name: "demo-network-policy", Namespace: "default"}
+	managedNP := func() *networkingv1.NetworkPolicy {
+		return &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: npKey.Name, Namespace: npKey.Namespace, Labels: hashLabels}}
+	}
+	otherOwner := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "other", UID: "other-uid"}}
+
+	testCases := []struct {
+		name string
+		// objects are in both the informer cache and the API server.
+		objects []client.Object
+		// liveObjects are on the API server but not yet in the informer cache.
+		liveObjects []client.Object
+		// beforeDelete changes the API server right before the controller deletes the policy.
+		beforeDelete func(ctx context.Context, c client.Client) error
+		wantKept     bool
+	}{
+		{
+			name:     "kept while a Sandbox uses it",
+			objects:  []client.Object{managedNP(), &sandboxv1beta1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default", Labels: hashLabels}}},
+			wantKept: true,
+		},
+		{
+			name:     "kept while a Pod outlives its Sandbox",
+			objects:  []client.Object{managedNP(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default", Labels: hashLabels}}},
+			wantKept: true,
+		},
+		{
+			name:    "deleted once nothing uses it",
+			objects: []client.Object{managedNP()},
+		},
+		{
+			name:    "deleted when only another namespace uses the hash",
+			objects: []client.Object{managedNP(), &sandboxv1beta1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "other", Labels: hashLabels}}},
+		},
+		{
+			name:     "policy without the managed label is left alone",
+			objects:  []client.Object{&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: npKey.Name, Namespace: npKey.Namespace}}},
+			wantKept: true,
+		},
+		{
+			name: "labeled policy that another object controls is left alone",
+			objects: []client.Object{&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+				Name: npKey.Name, Namespace: npKey.Namespace, Labels: hashLabels,
+				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(otherOwner, corev1.SchemeGroupVersion.WithKind("ConfigMap"))},
+			}}},
+			wantKept: true,
+		},
+		{
+			name:        "kept while a Sandbox missing from the cache uses it",
+			objects:     []client.Object{managedNP()},
+			liveObjects: []client.Object{&sandboxv1beta1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default", Labels: hashLabels}}},
+			wantKept:    true,
+		},
+		{
+			name:        "kept when the template is recreated but missing from the cache",
+			objects:     []client.Object{managedNP()},
+			liveObjects: []client.Object{&extensionsv1beta1.SandboxTemplate{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"}}},
+			wantKept:    true,
+		},
+		{
+			name:    "kept when the policy changes before the delete",
+			objects: []client.Object{managedNP()},
+			beforeDelete: func(ctx context.Context, c client.Client) error {
+				np := &networkingv1.NetworkPolicy{}
+				if err := c.Get(ctx, npKey, np); err != nil {
+					return err
+				}
+				np.Annotations = map[string]string{"edited": "true"}
+				return c.Update(ctx, np)
+			},
+			wantKept: true,
+		},
+		{
+			name:    "no error when the policy is gone before the delete",
+			objects: []client.Object{managedNP()},
+			beforeDelete: func(ctx context.Context, c client.Client) error {
+				return c.Delete(ctx, managedNP())
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := newScheme(t)
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.objects...).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+						if tc.beforeDelete != nil {
+							if err := tc.beforeDelete(ctx, c); err != nil {
+								return err
+							}
+						}
+						return c.Delete(ctx, obj, opts...)
+					},
+				}).Build()
+			r := &SandboxTemplateReconciler{
+				Client:    c,
+				APIReader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(slices.Concat(tc.objects, tc.liveObjects)...).Build(),
+				Scheme:    scheme,
+				Recorder:  events.NewFakeRecorder(10),
+				Tracer:    asmetrics.NewNoOp(),
+			}
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			err := c.Get(ctx, npKey, &networkingv1.NetworkPolicy{})
+			if tc.wantKept && err != nil {
+				t.Fatalf("expected NetworkPolicy to be kept, got err: %v", err)
+			}
+			if !tc.wantKept && !k8errors.IsNotFound(err) {
+				t.Fatalf("expected NetworkPolicy to be deleted, got err: %v", err)
+			}
+		})
+	}
+}
+
+func TestSandboxTemplateNetworkPolicyWatches(t *testing.T) {
+	ctx := context.Background()
+	hashLabels := map[string]string{sandboxTemplateRefHash: SandboxTemplateRefHash("demo")}
+	template := &extensionsv1beta1.SandboxTemplate{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"}}
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "demo-network-policy", Namespace: "default", Labels: hashLabels}}
+	labeled := &sandboxv1beta1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default", Labels: hashLabels}}
+	unlabeled := &sandboxv1beta1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default"}}
+	want := []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(template)}}
+
+	if got := findTemplateForNetworkPolicy(ctx, np); !slices.Equal(got, want) {
+		t.Errorf("findTemplateForNetworkPolicy() = %v, want %v", got, want)
+	}
+	r, _ := newTestTemplateReconciler(t, np)
+	if got := r.findTemplatesForConsumer(ctx, labeled); !slices.Equal(got, want) {
+		t.Errorf("findTemplatesForConsumer() for a deleted template = %v, want %v", got, want)
+	}
+	r, _ = newTestTemplateReconciler(t, np, template)
+	if got := r.findTemplatesForConsumer(ctx, labeled); len(got) != 0 {
+		t.Errorf("findTemplatesForConsumer() for an existing template = %v, want none", got)
+	}
+
+	pred := templateConsumerReleasedPredicate()
+	if pred.Create(event.CreateEvent{Object: labeled}) {
+		t.Error("expected create events to be filtered")
+	}
+	if !pred.Delete(event.DeleteEvent{Object: labeled}) {
+		t.Error("expected delete of a labeled Sandbox to pass")
+	}
+	if pred.Delete(event.DeleteEvent{Object: unlabeled}) {
+		t.Error("expected delete of an unlabeled Sandbox to be filtered")
+	}
+	if !pred.Update(event.UpdateEvent{ObjectOld: labeled, ObjectNew: unlabeled}) {
+		t.Error("expected removal of the template ref hash label to pass")
+	}
+	if pred.Update(event.UpdateEvent{ObjectOld: labeled, ObjectNew: labeled}) {
+		t.Error("expected updates that keep the label to be filtered")
+	}
 }

@@ -27,7 +27,7 @@ example removes; the identity part needs one more cluster-side change, described
 
 | | Controller default (`Managed`) | This example |
 | --- | --- | --- |
-| Policies in the namespace | one per `SandboxTemplate`, created and deleted with it | one, created once by the operator |
+| Policies in the namespace | one per `SandboxTemplate`, created with it and deleted after it and its sandboxes are gone | one, created once by the operator |
 | Pod selector | `agents.x-k8s.io/sandbox-template-ref-hash=<hash>` | `app=agent-sandbox-rl` |
 | Ingress | sandbox-router only | sandbox-router, plus pods in the namespace labelled `agent-sandbox-rl/client=true` (the fleet's clients) |
 | Egress | public IPs only; private, link-local and cluster ranges denied | same, plus UDP/TCP 53 to kube-dns |

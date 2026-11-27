@@ -569,10 +569,11 @@ func main() {
 		}
 
 		if err = (&extensionscontrollers.SandboxTemplateReconciler{
-			Client:   mgr.GetClient(),
-			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorder("sandboxtemplate-controller"),
-			Tracer:   instrumenter,
+			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
+			Scheme:    mgr.GetScheme(),
+			Recorder:  mgr.GetEventRecorder("sandboxtemplate-controller"),
+			Tracer:    instrumenter,
 		}).SetupWithManager(mgr, sandboxTemplateConcurrentWorkers); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SandboxTemplate")
 			os.Exit(1)
